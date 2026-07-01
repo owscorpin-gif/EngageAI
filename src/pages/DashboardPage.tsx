@@ -1,93 +1,52 @@
-import React, { useState } from 'react';
-import { Toast } from '../components/Toast';
+import React from 'react';
+import { useDashboard } from '../contexts/DashboardContext';
+import { useNavigate } from 'react-router-dom';
 import { 
   Video, 
   MessageSquare, 
   Sparkles, 
   Clock, 
-  Search, 
+  ArrowRight,
   Trash2, 
-  AlertCircle 
+  MessageCircle,
+  Play
 } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
-  const [videoUrl, setVideoUrl] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
-  const [isValidating, setIsValidating] = useState(false);
+  const { kpis, analyzedVideos, setCurrentVideoById, clearVideo } = useDashboard();
+  const navigate = useNavigate();
 
-  // Validate YouTube Video URL
-  const validateYoutubeUrl = (url: string) => {
-    const trimmed = url.trim();
-    if (!trimmed) {
-      return 'Please enter a YouTube video URL';
-    }
-
-    // YouTube regex pattern supporting watch, embed, mobile, share, and shorts links
-    const regExp = /^(?:https?:\/\/)?(?:www\.)?(?:m\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([a-zA-Z0-9_-]{11})(?:\S+)?$/;
-    const match = trimmed.match(regExp);
-
-    if (!match) {
-      return 'Please enter a valid YouTube URL (e.g. https://www.youtube.com/watch?v=dQw4w9WgXcQ)';
-    }
-
-    return null;
-  };
-
-  const handleAnalyze = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setToast(null);
-
-    const validationError = validateYoutubeUrl(videoUrl);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-
-    // Simulated short delay for validating aesthetics
-    setIsValidating(true);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    setIsValidating(false);
-
-    setToast({
-      message: 'Video URL accepted. Analysis module will be connected in the next phase.',
-      type: 'success'
-    });
-  };
-
-  const handleClear = () => {
-    setVideoUrl('');
-    setError(null);
-    setToast(null);
+  const handleSelectVideoForModeration = (id: string) => {
+    setCurrentVideoById(id);
+    navigate('/analyze');
   };
 
   const kpiCards = [
     { 
       title: 'Videos Analyzed', 
-      value: 0, 
-      desc: 'No activity this session', 
+      value: kpis.videosAnalyzed, 
+      desc: kpis.videosAnalyzed > 0 ? 'Active session library' : 'No activity this session', 
       icon: Video, 
       color: 'text-indigo-500 bg-indigo-500/5 border-indigo-500/10' 
     },
     { 
       title: 'Total Comments', 
-      value: 0, 
-      desc: 'Waiting for connection', 
+      value: kpis.totalComments, 
+      desc: kpis.totalComments > 0 ? 'Crawled from feed' : 'Waiting for connection', 
       icon: MessageSquare, 
       color: 'text-emerald-500 bg-emerald-500/5 border-emerald-500/10' 
     },
     { 
       title: 'AI Replies', 
-      value: 0, 
-      desc: 'Auto-pilot disabled', 
+      value: kpis.aiReplies, 
+      desc: kpis.aiReplies > 0 ? `${kpis.aiReplies} replies proposed/posted` : 'Auto-pilot disabled', 
       icon: Sparkles, 
       color: 'text-amber-500 bg-amber-500/5 border-amber-500/10' 
     },
     { 
       title: 'Pending Reviews', 
-      value: 0, 
-      desc: 'Inbox is clean', 
+      value: kpis.pendingReviews, 
+      desc: kpis.pendingReviews > 0 ? 'Awaiting creator check' : 'Inbox is clean', 
       icon: Clock, 
       color: 'text-rose-500 bg-rose-500/5 border-rose-500/10' 
     },
@@ -101,105 +60,9 @@ export const DashboardPage: React.FC = () => {
           Overview
         </h1>
         <p className="text-slate-500 dark:text-slate-400 font-medium text-sm md:text-base">
-          Submit YouTube links below to fetch, inspect, and draft automated replies.
+          Track video statistics, review pending drafts, and view automated replies across your channels.
         </p>
       </div>
-
-      {/* Analyzer Card */}
-      <section 
-        id="analyzer-card" 
-        className="glass-panel rounded-3xl shadow-xl p-6 md:p-8 relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:border-slate-300 dark:hover:border-slate-800"
-      >
-        {/* Glow accent */}
-        <div className="absolute -top-12 -right-12 w-48 h-48 bg-primary-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-2.5 rounded-2xl bg-primary-500/10 text-primary-600 dark:text-primary-400">
-            <Search className="w-6 h-6" />
-          </div>
-          <div>
-            <h2 className="font-heading font-bold text-xl text-slate-800 dark:text-slate-100">
-              Analyze YouTube Video
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
-              Submit a video URL to start fetching comments.
-            </p>
-          </div>
-        </div>
-
-        <form onSubmit={handleAnalyze} className="space-y-6">
-          <div className="space-y-2">
-            <label 
-              htmlFor="youtube-url-input" 
-              className="block text-sm font-semibold text-slate-700 dark:text-slate-300"
-            >
-              YouTube Video URL
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                id="youtube-url-input"
-                value={videoUrl}
-                onChange={(e) => {
-                  setVideoUrl(e.target.value);
-                  if (error) setError(null);
-                }}
-                placeholder="https://www.youtube.com/watch?v=..."
-                className={`w-full px-5 py-4 rounded-2xl border bg-slate-50/50 dark:bg-slate-900/30 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30 transition-all font-medium ${
-                  error 
-                    ? 'border-rose-500/50 focus:border-rose-500 focus:ring-rose-500/20' 
-                    : 'border-slate-200 dark:border-slate-800/80 focus:border-primary-500'
-                }`}
-                disabled={isValidating}
-              />
-            </div>
-            {error && (
-              <div 
-                className="flex items-center gap-2 mt-2 text-rose-600 dark:text-rose-400 text-sm font-semibold animate-slide-in"
-                id="url-error-msg"
-              >
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap gap-4 pt-2">
-            <button
-              type="submit"
-              disabled={isValidating}
-              className="flex items-center gap-2 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold shadow-md shadow-primary-500/10 hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
-              id="analyze-submit-btn"
-            >
-              {isValidating ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  <span>Validating...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4" />
-                  <span>Analyze</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleClear}
-              disabled={isValidating || !videoUrl}
-              className="flex items-center gap-2 px-6 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-600 dark:text-slate-400 font-semibold transition-all cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-              id="analyze-clear-btn"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>Clear</span>
-            </button>
-          </div>
-        </form>
-      </section>
 
       {/* KPI Cards Grid */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -219,7 +82,7 @@ export const DashboardPage: React.FC = () => {
                 </div>
               </div>
               <div className="mt-4">
-                <span className="font-heading font-extrabold text-4xl text-slate-900 dark:text-white tracking-tight">
+                <span className="font-heading font-extrabold text-4xl text-slate-900 dark:text-white tracking-tight animate-slide-in">
                   {card.value}
                 </span>
                 <p className="text-xs text-slate-400 dark:text-slate-500 font-medium mt-1">
@@ -231,14 +94,116 @@ export const DashboardPage: React.FC = () => {
         })}
       </section>
 
-      {/* Dynamic Toast System */}
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+      {/* Recently Analyzed History Section */}
+      <section className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="font-heading font-bold text-xl text-slate-800 dark:text-slate-100">
+            Session Analysis History
+          </h2>
+          {analyzedVideos.length > 0 && (
+            <button 
+              onClick={() => navigate('/analyze')}
+              className="flex items-center gap-1.5 text-xs font-bold text-primary-500 hover:text-primary-600 transition-colors cursor-pointer"
+            >
+              <span>Analyze New Video</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {analyzedVideos.length === 0 ? (
+          /* Empty History CTA */
+          <div className="glass-panel rounded-3xl p-8 md:p-12 text-center max-w-2xl mx-auto space-y-6 hover:shadow-xl transition-all duration-300">
+            <div className="w-16 h-16 bg-primary-500/10 text-primary-500 rounded-2xl flex items-center justify-center mx-auto shadow-inner animate-pulse">
+              <MessageCircle className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-slate-200">
+                No videos analyzed yet
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 max-w-sm mx-auto leading-relaxed">
+                Connect your first YouTube video link to start crawler and drafting replies in seconds.
+              </p>
+            </div>
+            <button
+              onClick={() => navigate('/analyze')}
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold shadow-md shadow-primary-500/10 hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer"
+            >
+              <span>Start Analyzing</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          /* History Grid */
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {analyzedVideos.map((video) => {
+              const pendingCount = video.comments.filter(c => c.status === 'pending').length;
+              const repliedCount = video.comments.filter(c => c.status === 'replied').length;
+
+              return (
+                <div 
+                  key={video.id}
+                  className="glass-panel rounded-3xl overflow-hidden border border-slate-200/80 dark:border-slate-800/60 shadow-sm hover:shadow-xl hover:scale-[1.005] transition-all duration-300 flex flex-col justify-between"
+                >
+                  <div className="p-5 flex gap-4">
+                    <div className="relative w-28 h-20 rounded-xl overflow-hidden bg-slate-900 flex-shrink-0 group">
+                      <img 
+                        src={video.thumbnail} 
+                        alt={video.title} 
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      />
+                      <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Play className="w-5 h-5 text-white fill-white" />
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 min-w-0 space-y-1.5">
+                      <h3 className="font-heading font-bold text-sm text-slate-800 dark:text-slate-100 line-clamp-2 leading-snug">
+                        {video.title}
+                      </h3>
+                      <p className="text-[11px] text-slate-400 dark:text-slate-500 font-semibold truncate">
+                        {video.channelTitle} • {video.views}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Footer Stats / Action Bar */}
+                  <div className="px-5 py-4 bg-slate-50/50 dark:bg-slate-900/30 border-t border-slate-200/80 dark:border-slate-800/60 flex items-center justify-between gap-4">
+                    <div className="flex gap-4 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                        <span>{repliedCount} Replied</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        <span>{pendingCount} Pending</span>
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => clearVideo(video.id)}
+                        className="p-2 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 border border-transparent transition-all cursor-pointer"
+                        title="Delete from history"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleSelectVideoForModeration(video.id)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer shadow-sm"
+                      >
+                        <span>Moderate</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 };
+

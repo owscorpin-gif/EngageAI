@@ -43,7 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (storedUser) {
         try {
           setCurrentUser(JSON.parse(storedUser));
-        } catch (e) {
+        } catch {
           localStorage.removeItem('engage_ai_mock_user');
         }
       }

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../hooks/useTheme';
 import { 
@@ -23,6 +24,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
   const { currentUser, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const location = useLocation();
 
   const handleLogout = async () => {
     try {
@@ -33,10 +35,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
   };
 
   const menuItems = [
-    { name: 'Dashboard', icon: LayoutDashboard, active: true, disabled: false },
-    { name: 'Analyze Video', icon: Video, active: false, disabled: false },
-    { name: 'History', icon: History, active: false, disabled: true, tooltip: 'Coming in Phase 2' },
-    { name: 'Settings', icon: Settings, active: false, disabled: true, tooltip: 'Coming in Phase 2' },
+    { name: 'Dashboard', icon: LayoutDashboard, path: '/', active: location.pathname === '/', disabled: false },
+    { name: 'Analyze Video', icon: Video, path: '/analyze', active: location.pathname === '/analyze', disabled: false },
+    { name: 'History', icon: History, path: '/history', active: location.pathname === '/history', disabled: true, tooltip: 'Coming in Phase 2' },
+    { name: 'Settings', icon: Settings, path: '/settings', active: location.pathname === '/settings', disabled: true, tooltip: 'Coming in Phase 2' },
   ];
 
   return (
@@ -97,8 +99,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
             }
 
             return (
-              <button
+              <Link
                 key={index}
+                to={item.path || '#'}
                 className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer ${
                   item.active 
                     ? 'bg-gradient-to-r from-primary-500/10 to-accent-500/10 text-primary-600 dark:text-primary-400 border border-primary-500/20 shadow-sm shadow-primary-500/5' 
@@ -106,14 +109,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
                 }`}
                 onClick={() => {
                   setIsSidebarOpen(false);
-                  if (item.name === 'Analyze Video') {
-                    document.getElementById('analyzer-card')?.scrollIntoView({ behavior: 'smooth' });
-                  }
                 }}
               >
                 <Icon className={`w-5 h-5 ${item.active ? 'text-primary-500 dark:text-primary-400' : ''}`} />
                 <span>{item.name}</span>
-              </button>
+              </Link>
             );
           })}
         </nav>
