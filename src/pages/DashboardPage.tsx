@@ -1,209 +1,174 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useDashboard } from '../contexts/DashboardContext';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Video, 
   MessageSquare, 
   Sparkles, 
   Clock, 
-  ArrowRight,
-  Trash2, 
-  MessageCircle,
-  Play
+  ShieldAlert,
+  HelpCircle,
+  ThumbsUp,
+  ThumbsDown,
+  Check,
+  X,
+  Edit2
 } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
-  const { kpis, analyzedVideos, setCurrentVideoById, clearVideo } = useDashboard();
+  const { analyzedVideos, approveReply, ignoreComment } = useDashboard();
   const navigate = useNavigate();
 
-  const handleSelectVideoForModeration = (id: string) => {
-    setCurrentVideoById(id);
-    navigate('/analyze');
-  };
+  // Aggregate metrics across all videos
+  const metrics = useMemo(() => {
+    let commentsToday = 0;
+    let repliesGenerated = 0;
+    let pending = 0;
+    let spam = 0;
+    let questions = 0;
+    let positive = 0;
+    let negative = 0;
+
+    analyzedVideos.forEach(video => {
+      video.comments.forEach(c => {
+        commentsToday++;
+        if (c.status === 'replied') repliesGenerated++;
+        if (c.status === 'pending') pending++;
+        if (c.category === 'Spam') spam++;
+        if (c.category === 'Question') questions++;
+        if (c.sentiment === 'positive' || c.sentiment === 'excited') positive++;
+        if (c.sentiment === 'negative' || c.sentiment === 'very_angry') negative++;
+      });
+    });
+
+    return { commentsToday, repliesGenerated, pending, spam, questions, positive, negative };
+  }, [analyzedVideos]);
+
+  // Aggregate recent comments across all videos
+  const recentComments = useMemo(() => {
+    const all = analyzedVideos.flatMap(v => v.comments.map(c => ({ ...c, videoId: v.id, videoTitle: v.title })));
+    // Sort logic could be added here if dates were present, but for now we'll just reverse to show latest first
+    return all.reverse().slice(0, 50); // Show top 50
+  }, [analyzedVideos]);
 
   const kpiCards = [
-    { 
-      title: 'Videos Analyzed', 
-      value: kpis.videosAnalyzed, 
-      desc: kpis.videosAnalyzed > 0 ? 'Active session library' : 'No activity this session', 
-      icon: Video, 
-      color: 'text-indigo-500 bg-indigo-500/5 border-indigo-500/10' 
-    },
-    { 
-      title: 'Total Comments', 
-      value: kpis.totalComments, 
-      desc: kpis.totalComments > 0 ? 'Crawled from feed' : 'Waiting for connection', 
-      icon: MessageSquare, 
-      color: 'text-emerald-500 bg-emerald-500/5 border-emerald-500/10' 
-    },
-    { 
-      title: 'AI Replies', 
-      value: kpis.aiReplies, 
-      desc: kpis.aiReplies > 0 ? `${kpis.aiReplies} replies proposed/posted` : 'Auto-pilot disabled', 
-      icon: Sparkles, 
-      color: 'text-amber-500 bg-amber-500/5 border-amber-500/10' 
-    },
-    { 
-      title: 'Pending Reviews', 
-      value: kpis.pendingReviews, 
-      desc: kpis.pendingReviews > 0 ? 'Awaiting creator check' : 'Inbox is clean', 
-      icon: Clock, 
-      color: 'text-rose-500 bg-rose-500/5 border-rose-500/10' 
-    },
+    { title: 'Comments Today', value: metrics.commentsToday, icon: MessageSquare, color: 'text-blue-500 bg-blue-500/10' },
+    { title: 'Replies Generated', value: metrics.repliesGenerated, icon: Sparkles, color: 'text-amber-500 bg-amber-500/10' },
+    { title: 'Pending', value: metrics.pending, icon: Clock, color: 'text-slate-500 bg-slate-500/10' },
+    { title: 'Spam', value: metrics.spam, icon: ShieldAlert, color: 'text-rose-500 bg-rose-500/10' },
+    { title: 'Questions', value: metrics.questions, icon: HelpCircle, color: 'text-indigo-500 bg-indigo-500/10' },
+    { title: 'Positive', value: metrics.positive, icon: ThumbsUp, color: 'text-emerald-500 bg-emerald-500/10' },
+    { title: 'Negative', value: metrics.negative, icon: ThumbsDown, color: 'text-red-500 bg-red-500/10' },
   ];
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto animate-slide-in">
-      {/* Header and Welcome */}
+    <div className="space-y-8 max-w-7xl mx-auto animate-slide-in">
       <div className="flex flex-col gap-2">
         <h1 className="font-heading font-extrabold text-3xl tracking-tight text-slate-900 dark:text-white">
-          Overview
+          Dashboard
         </h1>
         <p className="text-slate-500 dark:text-slate-400 font-medium text-sm md:text-base">
-          Track video statistics, review pending drafts, and view automated replies across your channels.
+          Real-time overview of your channel engagement.
         </p>
       </div>
 
       {/* KPI Cards Grid */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
         {kpiCards.map((card, idx) => {
           const Icon = card.icon;
           return (
             <div 
               key={idx}
-              className="glass-panel border border-slate-200/80 dark:border-slate-800/60 rounded-3xl p-6 shadow-md hover:shadow-xl hover:scale-[1.01] transition-all duration-300 flex flex-col justify-between min-h-[140px]"
+              className="glass-panel border border-slate-200/80 dark:border-slate-800/60 rounded-2xl p-4 shadow-sm hover:shadow-md hover:scale-[1.02] transition-all duration-300 flex flex-col justify-center items-center text-center gap-2"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
-                  {card.title}
-                </span>
-                <div className={`p-2.5 rounded-2xl border ${card.color}`}>
-                  <Icon className="w-5 h-5" />
-                </div>
+              <div className={`p-2 rounded-xl ${card.color}`}>
+                <Icon className="w-5 h-5" />
               </div>
-              <div className="mt-4">
-                <span className="font-heading font-extrabold text-4xl text-slate-900 dark:text-white tracking-tight animate-slide-in">
-                  {card.value}
-                </span>
-                <p className="text-xs text-slate-400 dark:text-slate-500 font-medium mt-1">
-                  {card.desc}
-                </p>
-              </div>
+              <span className="font-heading font-bold text-2xl text-slate-900 dark:text-white">
+                {card.value}
+              </span>
+              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                {card.title}
+              </span>
             </div>
           );
         })}
       </section>
 
-      {/* Recently Analyzed History Section */}
-      <section className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="font-heading font-bold text-xl text-slate-800 dark:text-slate-100">
-            Session Analysis History
-          </h2>
-          {analyzedVideos.length > 0 && (
-            <button 
-              onClick={() => navigate('/analyze')}
-              className="flex items-center gap-1.5 text-xs font-bold text-primary-500 hover:text-primary-600 transition-colors cursor-pointer"
-            >
-              <span>Analyze New Video</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+      {/* Recent Comments Feed */}
+      <section className="space-y-4">
+        <h2 className="font-heading font-bold text-xl text-slate-800 dark:text-slate-100 flex items-center gap-2">
+          Recent Comments
+        </h2>
+        
+        <div className="space-y-4">
+          {recentComments.length === 0 ? (
+            <div className="glass-panel p-8 rounded-3xl text-center text-slate-500">
+              No comments found. Connect a video to get started.
+            </div>
+          ) : (
+            recentComments.map((comment) => (
+              <div key={comment.id} className="glass-panel p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800/60 shadow-sm flex flex-col md:flex-row gap-6">
+                {/* Left: User Comment */}
+                <div className="flex-1 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <img src={comment.authorAvatar} alt={comment.authorName} className="w-8 h-8 rounded-full object-cover" />
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900 dark:text-white">{comment.authorName}</h4>
+                      <p className="text-[10px] text-slate-500 font-medium truncate max-w-[200px]">{comment.videoTitle}</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-2xl">
+                    {comment.text}
+                  </p>
+                </div>
+
+                {/* Right: AI Reply & Actions */}
+                <div className="flex-1 space-y-3 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800 pt-4 md:pt-0 md:pl-6">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-sm text-primary-600 dark:text-primary-400 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4" /> AI Reply
+                    </h4>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                      comment.status === 'replied' ? 'bg-emerald-500/10 text-emerald-500' :
+                      comment.status === 'ignored' ? 'bg-slate-500/10 text-slate-500' :
+                      'bg-amber-500/10 text-amber-500'
+                    }`}>
+                      {comment.status}
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 bg-primary-50 dark:bg-primary-500/5 p-3 rounded-2xl italic border border-primary-100 dark:border-primary-500/10">
+                    "{comment.aiReply}"
+                  </p>
+                  
+                  {comment.status === 'pending' && (
+                    <div className="flex items-center gap-2 pt-2">
+                      <button 
+                        onClick={() => approveReply(comment.videoId, comment.id, comment.aiReply)}
+                        className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+                      >
+                        <Check className="w-4 h-4" /> Approve
+                      </button>
+                      <button 
+                        onClick={() => ignoreComment(comment.videoId, comment.id)}
+                        className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+                      >
+                        <X className="w-4 h-4" /> Reject
+                      </button>
+                      <button 
+                        onClick={() => navigate('/categorize')} // User can go to categorize page to edit
+                        className="p-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl transition-colors"
+                        title="Edit Reply"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))
           )}
         </div>
-
-        {analyzedVideos.length === 0 ? (
-          /* Empty History CTA */
-          <div className="glass-panel rounded-3xl p-8 md:p-12 text-center max-w-2xl mx-auto space-y-6 hover:shadow-xl transition-all duration-300">
-            <div className="w-16 h-16 bg-primary-500/10 text-primary-500 rounded-2xl flex items-center justify-center mx-auto shadow-inner animate-pulse">
-              <MessageCircle className="w-8 h-8" />
-            </div>
-            <div className="space-y-2">
-              <h3 className="font-heading font-bold text-lg text-slate-800 dark:text-slate-200">
-                No videos analyzed yet
-              </h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 max-w-sm mx-auto leading-relaxed">
-                Connect your first YouTube video link to start crawler and drafting replies in seconds.
-              </p>
-            </div>
-            <button
-              onClick={() => navigate('/analyze')}
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold shadow-md shadow-primary-500/10 hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer"
-            >
-              <span>Start Analyzing</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        ) : (
-          /* History Grid */
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {analyzedVideos.map((video) => {
-              const pendingCount = video.comments.filter(c => c.status === 'pending').length;
-              const repliedCount = video.comments.filter(c => c.status === 'replied').length;
-
-              return (
-                <div 
-                  key={video.id}
-                  className="glass-panel rounded-3xl overflow-hidden border border-slate-200/80 dark:border-slate-800/60 shadow-sm hover:shadow-xl hover:scale-[1.005] transition-all duration-300 flex flex-col justify-between"
-                >
-                  <div className="p-5 flex gap-4">
-                    <div className="relative w-28 h-20 rounded-xl overflow-hidden bg-slate-900 flex-shrink-0 group">
-                      <img 
-                        src={video.thumbnail} 
-                        alt={video.title} 
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                      />
-                      <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Play className="w-5 h-5 text-white fill-white" />
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 min-w-0 space-y-1.5">
-                      <h3 className="font-heading font-bold text-sm text-slate-800 dark:text-slate-100 line-clamp-2 leading-snug">
-                        {video.title}
-                      </h3>
-                      <p className="text-[11px] text-slate-400 dark:text-slate-500 font-semibold truncate">
-                        {video.channelTitle} • {video.views}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Footer Stats / Action Bar */}
-                  <div className="px-5 py-4 bg-slate-50/50 dark:bg-slate-900/30 border-t border-slate-200/80 dark:border-slate-800/60 flex items-center justify-between gap-4">
-                    <div className="flex gap-4 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                        <span>{repliedCount} Replied</span>
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                        <span>{pendingCount} Pending</span>
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => clearVideo(video.id)}
-                        className="p-2 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 border border-transparent transition-all cursor-pointer"
-                        title="Delete from history"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleSelectVideoForModeration(video.id)}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer shadow-sm"
-                      >
-                        <span>Moderate</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </section>
     </div>
   );
 };
-

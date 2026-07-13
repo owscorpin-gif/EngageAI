@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { useDashboard } from '../contexts/DashboardContext';
 import { Toast } from '../components/Toast';
+import { validateInput, YouTubeUrlSchema, FeedbackReasonSchema, RatingSchema } from '../utils/validation';
+import { copyToClipboard, clipboardPreview } from '../utils/clipboard';
+import { getCategoryMeta, SENTIMENT_META, EMOTION_META, COMMENT_CATEGORIES, PRIORITY_META, DECISION_META, ALL_DECISION_ACTIONS } from '../utils/commentMeta';
+import type { CommentCategory, PriorityTier, DecisionAction } from '../utils/commentMeta';
+import { getPersonalitySystemPrompt } from './PersonalityPage';
 import { 
   Sparkles, 
   Trash2, 
@@ -13,40 +18,153 @@ import {
   Ban, 
   Video,
   Play,
-  VolumeX,
-  Volume2
+  Brain,
+  Star,
+  Copy,
+  ClipboardCheck,
+  BookOpen,
+  FileText,
+  Tags,
+  Globe,
+  Lightbulb,
+  FolderHeart,
+  ChevronDown,
+  ChevronUp,
+  Pin,
+  Heart,
+  Crown,
+  Award,
+  ArrowUpDown,
+  UserCheck,
+  Zap,
+  ScanSearch,
 } from 'lucide-react';
 
 export const AnalyzeVideoPage: React.FC = () => {
   const {
     currentVideo,
     isAnalyzing,
-    autoPilotActive,
+    approvalMode,
     analyzeVideo,
     approveReply,
     ignoreComment,
     regenerateReply,
     updateReplyText,
-    toggleAutoPilot
+    setApprovalMode,
+    submitFeedback,
+    applyDecision,
+    activePromptRules,
   } = useDashboard();
+
+  // Phase 9: Prompt Inspector toggle — keyed by comment ID
+  const [showPromptInspector, setShowPromptInspector] = useState<Record<string, boolean>>({});
 
   const [videoUrl, setVideoUrl] = useState('');
   const [urlError, setUrlError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
-  const [sentimentFilter, setSentimentFilter] = useState<'all' | 'positive' | 'neutral' | 'negative'>('all');
-  const [categoryFilter, setCategoryFilter] = useState<'all' | 'Question' | 'Feedback' | 'Spam' | 'Appreciation'>('all');
+  const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null);
+  const [showInsights, setShowInsights] = useState(false);
 
-  const validateYoutubeUrl = (url: string) => {
+  // AI Learning States
+  const [originalDrafts, setOriginalDrafts] = useState<Record<string, string>>({});
+  const [feedbackTarget, setFeedbackTarget] = useState<{
+    commentId: string;
+    commentText: string;
+    originalReply: string;
+    editedReply: string;
+  } | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackReason, setFeedbackReason] = useState('Too formal');
+
+  // Populate original drafts snapshot
+  React.useEffect(() => {
+    if (currentVideo) {
+      setOriginalDrafts(prev => {
+        const next = { ...prev };
+        let updated = false;
+        currentVideo.comments.forEach(c => {
+          if (!next[c.id]) {
+            next[c.id] = c.aiReply;
+            updated = true;
+          }
+        });
+        return updated ? next : prev;
+      });
+    }
+  }, [currentVideo]);
+
+  const handleApproveClick = (comment: any) => {
+    const original = originalDrafts[comment.id] || comment.aiReply;
+    if (comment.aiReply !== original) {
+      setFeedbackRating(5);
+      setFeedbackReason('Too formal');
+      setFeedbackTarget({
+        commentId: comment.id,
+        commentText: comment.text,
+        originalReply: original,
+        editedReply: comment.aiReply
+      });
+    } else {
+      approveReply(currentVideo!.id, comment.id, comment.aiReply);
+      setToast({ message: 'Reply approved and posted!', type: 'success' });
+    }
+  };
+
+  const handleSubmitFeedback = (skip: boolean) => {
+    if (!feedbackTarget) return;
+
+    if (!skip) {
+      // Validate reason enum and rating range before storing
+      const reasonValidation = validateInput(FeedbackReasonSchema, feedbackReason);
+      const ratingValidation = validateInput(RatingSchema, feedbackRating);
+
+      if (!reasonValidation.success || !ratingValidation.success) {
+        setToast({ message: 'Invalid feedback data — please try again.', type: 'error' });
+        setFeedbackTarget(null);
+        return;
+      }
+
+      submitFeedback({
+        commentText: feedbackTarget.commentText,
+        originalReply: feedbackTarget.originalReply,
+        editedReply: feedbackTarget.editedReply,
+        reason: reasonValidation.data,
+        rating: ratingValidation.data
+      });
+      setToast({ message: 'Feedback submitted to AI memory.', type: 'success' });
+    } else {
+      setToast({ message: 'Reply approved without feedback.', type: 'info' });
+    }
+
+    // Approve the reply
+    approveReply(currentVideo!.id, feedbackTarget.commentId, feedbackTarget.editedReply);
+    setFeedbackTarget(null);
+  };
+  const [sentimentFilter, setSentimentFilter] = useState<'all' | 'positive' | 'neutral' | 'negative' | 'very_angry' | 'excited'>('all');
+  const [categoryFilter, setCategoryFilter] = useState<'all' | CommentCategory>('all');
+  const [showCategoryFilter, setShowCategoryFilter] = useState(false);
+  const [priorityFilter, setPriorityFilter] = useState<'all' | PriorityTier>('all');
+  const [sortBy, setSortBy] = useState<'priority' | 'relevance' | 'newest'>('priority');
+
+  const handleValidateUrl = (url: string): string | null => {
     const trimmed = url.trim();
-    if (!trimmed) {
-      return 'Please enter a YouTube video URL';
+    if (!trimmed) return 'Please enter a YouTube video URL';
+    const result = validateInput(YouTubeUrlSchema, trimmed);
+    return result.success ? null : result.error;
+  };
+
+  const handleCopyReply = async (commentId: string, text: string) => {
+    const result = await copyToClipboard(text);
+    if (result.success) {
+      setCopiedCommentId(commentId);
+      setToast({
+        message: `Copied: "${clipboardPreview(result.copied, 50)}"`,
+        type: 'success'
+      });
+      setTimeout(() => setCopiedCommentId(null), 2000);
+    } else {
+      setToast({ message: result.error ?? 'Failed to copy reply.', type: 'error' });
     }
-    const regExp = /^(?:https?:\/\/)?(?:www\.)?(?:m\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([a-zA-Z0-9_-]{11})(?:\S+)?$/;
-    const match = trimmed.match(regExp);
-    if (!match) {
-      return 'Please enter a valid YouTube URL (e.g. https://www.youtube.com/watch?v=dQw4w9WgXcQ)';
-    }
-    return null;
   };
 
   const handleAnalyzeSubmit = async (e: React.FormEvent) => {
@@ -54,7 +172,7 @@ export const AnalyzeVideoPage: React.FC = () => {
     setUrlError(null);
     setToast(null);
 
-    const validationError = validateYoutubeUrl(videoUrl);
+    const validationError = handleValidateUrl(videoUrl);
     if (validationError) {
       setUrlError(validationError);
       return;
@@ -84,9 +202,21 @@ export const AnalyzeVideoPage: React.FC = () => {
     ? currentVideo.comments.filter(comment => {
         const matchesSentiment = sentimentFilter === 'all' || comment.sentiment === sentimentFilter;
         const matchesCategory = categoryFilter === 'all' || comment.category === categoryFilter;
-        return matchesSentiment && matchesCategory;
+        const matchesPriority = priorityFilter === 'all' || comment.priorityTier === priorityFilter;
+        return matchesSentiment && matchesCategory && matchesPriority;
       })
     : [];
+
+  // Sort Comments (Phase 7 priority default)
+  const sortedComments = [...filteredComments].sort((a, b) => {
+    if (sortBy === 'priority') {
+      return (b.priorityScore ?? 0) - (a.priorityScore ?? 0);
+    }
+    if (sortBy === 'newest') {
+      return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+    }
+    return 0; // maintain original relevance order
+  });
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto animate-slide-in">
@@ -107,7 +237,7 @@ export const AnalyzeVideoPage: React.FC = () => {
         <form onSubmit={handleAnalyzeSubmit} className="space-y-6">
           <div className="space-y-2">
             <label htmlFor="youtube-url-input" className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
-              YouTube Video URL
+              YouTube Video URL or Video ID
             </label>
             <div className="flex flex-col sm:flex-row gap-3">
               <input
@@ -118,7 +248,8 @@ export const AnalyzeVideoPage: React.FC = () => {
                   setVideoUrl(e.target.value);
                   if (urlError) setUrlError(null);
                 }}
-                placeholder="https://www.youtube.com/watch?v=..."
+                maxLength={500}
+                placeholder="Enter YouTube URL or 11-char Video ID (e.g. dQw4w9WgXcQ)"
                 className={`flex-1 px-5 py-3.5 rounded-2xl border bg-slate-50/50 dark:bg-slate-900/30 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30 transition-all font-medium ${
                   urlError 
                     ? 'border-rose-500/50 focus:border-rose-500 focus:ring-rose-500/20' 
@@ -235,6 +366,113 @@ export const AnalyzeVideoPage: React.FC = () => {
             </div>
           </section>
 
+          {/* AI Video Insights & Context Panel */}
+          {currentVideo.summary && (
+            <section className="glass-panel rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden transition-all duration-300">
+              <button
+                type="button"
+                onClick={() => setShowInsights(prev => !prev)}
+                className="w-full flex items-center justify-between px-6 py-4 bg-slate-50/50 dark:bg-slate-900/30 hover:bg-slate-100/50 dark:hover:bg-slate-800/40 transition-all font-semibold text-slate-800 dark:text-slate-200 cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <Brain className="w-5 h-5 text-primary-500" />
+                  <span className="text-sm font-bold uppercase tracking-wider">AI Video Analyzer Insights</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 dark:text-slate-500 font-medium">
+                    {showInsights ? 'Hide Details' : 'Show Details'}
+                  </span>
+                  {showInsights ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </div>
+              </button>
+
+              {showInsights && (
+                <div className="p-6 md:p-8 border-t border-slate-200/60 dark:border-slate-800/60 space-y-6 animate-slide-in">
+                  
+                  {/* Grid section */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    
+                    {/* Summary & Main Topic Card */}
+                    <div className="md:col-span-2 space-y-4">
+                      <div className="bg-slate-50 dark:bg-slate-900/40 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 space-y-3">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                          <BookOpen className="w-4 h-4 text-violet-500" />
+                          <span>Video Summary</span>
+                        </h4>
+                        <p className="text-sm text-slate-750 dark:text-slate-350 leading-relaxed font-medium">
+                          {currentVideo.summary}
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-50 dark:bg-slate-900/40 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 space-y-3">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                          <Lightbulb className="w-4 h-4 text-amber-500" />
+                          <span>Main Topic & Thesis</span>
+                        </h4>
+                        <p className="text-sm text-slate-750 dark:text-slate-350 leading-relaxed font-medium">
+                          {currentVideo.mainTopic}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Metadata Card */}
+                    <div className="bg-slate-50 dark:bg-slate-900/40 rounded-2xl p-5 border border-slate-100 dark:border-slate-800/60 space-y-4">
+                      <div className="space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                          <FolderHeart className="w-3.5 h-3.5" />
+                          <span>Category</span>
+                        </span>
+                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                          {currentVideo.category}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                          <Globe className="w-3.5 h-3.5" />
+                          <span>Language</span>
+                        </span>
+                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                          {currentVideo.language}
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                          <Tags className="w-3.5 h-3.5" />
+                          <span>Keywords</span>
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {currentVideo.keywords?.map((keyword, i) => (
+                            <span
+                              key={i}
+                              className="text-[10px] font-semibold bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 px-2 py-0.5 rounded animate-fade-in"
+                            >
+                              {keyword}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Transcript Outline Section */}
+                  {currentVideo.transcript && (
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                        <FileText className="w-4 h-4 text-primary-500" />
+                        <span>Reconstructed Transcript Outline</span>
+                      </h4>
+                      <div className="bg-slate-950 text-slate-300 p-5 rounded-2xl border border-slate-800 text-xs font-mono leading-relaxed whitespace-pre-wrap max-h-60 overflow-y-auto custom-scrollbar">
+                        {currentVideo.transcript}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Autopilot and Filtering Dashboard controls */}
           <section className="glass-panel rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="flex flex-col gap-1">
@@ -251,70 +489,152 @@ export const AnalyzeVideoPage: React.FC = () => {
               </p>
             </div>
 
-            {/* Auto Pilot Toggle Switch */}
-            <button
-              onClick={toggleAutoPilot}
-              className={`flex items-center gap-3 px-5 py-3 rounded-2xl border transition-all duration-300 hover:scale-[1.01] active:scale-[0.99] cursor-pointer ${
-                autoPilotActive 
-                  ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border-purple-500/30 text-purple-600 dark:text-purple-400 shadow-md shadow-purple-500/5 ring-1 ring-purple-500/30' 
-                  : 'bg-slate-50/50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
-              }`}
-            >
-              <div className="relative">
-                {autoPilotActive ? (
-                  <div className="absolute -inset-1 rounded-full bg-purple-500/40 animate-ping"></div>
-                ) : null}
-                {autoPilotActive ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
-              </div>
-              <div className="text-left">
-                <p className="text-xs font-bold uppercase tracking-wider leading-none">Auto-Pilot</p>
-                <p className="text-[10px] font-medium opacity-80 mt-0.5">
-                  {autoPilotActive ? 'Automated Approvals Active' : 'Manual Moderation Mode'}
-                </p>
-              </div>
-            </button>
+            {/* Phase 11: 3-Way Approval Mode Segmented Control */}
+            <div className="flex bg-slate-100/50 dark:bg-slate-900/50 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 self-center lg:self-auto">
+              <button
+                onClick={() => setApprovalMode('auto')}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                  approvalMode === 'auto'
+                    ? 'bg-white dark:bg-slate-800 text-purple-600 dark:text-purple-400 shadow shadow-purple-500/10'
+                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                }`}
+                title="Automatically reply to safe comments"
+              >
+                <Zap className="w-4 h-4" /> Auto Reply
+              </button>
+              <button
+                onClick={() => setApprovalMode('approve')}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                  approvalMode === 'approve'
+                    ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow shadow-indigo-500/10'
+                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                }`}
+                title="Draft replies but wait for your approval"
+              >
+                <CheckCircle2 className="w-4 h-4" /> Approve First
+              </button>
+              <button
+                onClick={() => setApprovalMode('suggestion')}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                  approvalMode === 'suggestion'
+                    ? 'bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow shadow-amber-500/10'
+                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                }`}
+                title="Only suggest actions; do not draft text"
+              >
+                <Lightbulb className="w-4 h-4" /> Suggestion Only
+              </button>
+            </div>
           </section>
 
           {/* Filters Bar */}
-          <div className="flex flex-wrap items-center gap-4 justify-between">
-            <div className="flex flex-wrap gap-2">
-              <span className="text-xs font-bold text-slate-400 dark:text-slate-500 self-center mr-2">Sentiment:</span>
-              {(['all', 'positive', 'neutral', 'negative'] as const).map((filter) => (
-                <button
-                  key={filter}
-                  onClick={() => setSentimentFilter(filter)}
-                  className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
-                    sentimentFilter === filter
-                      ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900 border-transparent shadow'
-                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  {filter.charAt(0).toUpperCase() + filter.slice(1)}
-                </button>
-              ))}
+          <div className="flex flex-col gap-4 p-5 bg-slate-50/40 dark:bg-slate-900/20 rounded-2xl border border-slate-200/50 dark:border-slate-800/50">
+            {/* Row 1: Sentiment & Sort */}
+            <div className="flex flex-wrap items-center gap-4 justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-400 dark:text-slate-500 mr-1">Sentiment:</span>
+                {(['all', 'positive', 'neutral', 'negative', 'very_angry', 'excited'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setSentimentFilter(filter)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
+                      sentimentFilter === filter
+                        ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900 border-transparent shadow'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {filter === 'all' ? 'All' : filter === 'very_angry' ? '😡 Very Angry' : filter === 'excited' ? '🤩 Excited' : filter.charAt(0).toUpperCase() + filter.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-violet-500" /> Sort By:
+                </span>
+                {(['priority', 'relevance', 'newest'] as const).map((sortOption) => (
+                  <button
+                    key={sortOption}
+                    onClick={() => setSortBy(sortOption)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                      sortBy === sortOption
+                        ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {sortOption === 'priority' ? '🔥 AI Priority' : sortOption === 'relevance' ? '📌 YouTube Pinned' : '🕒 Date'}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <span className="text-xs font-bold text-slate-400 dark:text-slate-500 self-center mr-2">Category:</span>
-              {(['all', 'Question', 'Feedback', 'Spam', 'Appreciation'] as const).map((filter) => (
+            {/* Row 2: Priority Tiers */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 dark:text-slate-500 mr-1">AI Priority:</span>
+              {(['all', 'highest', 'high', 'medium', 'low', 'ignore'] as const).map((filter) => {
+                const pri = filter !== 'all' ? PRIORITY_META[filter] : null;
+                return (
+                  <button
+                    key={filter}
+                    onClick={() => setPriorityFilter(filter)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
+                      priorityFilter === filter
+                        ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900 border-transparent shadow'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {filter === 'all' ? 'All Priorities' : `${pri?.emoji} ${pri?.label}`}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Row 3: Category Selector */}
+            <div className="flex flex-col gap-2 w-full">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-400 dark:text-slate-500">Category:</span>
                 <button
-                  key={filter}
-                  onClick={() => setCategoryFilter(filter)}
-                  className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
-                    categoryFilter === filter
-                      ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900 border-transparent shadow'
-                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
-                  }`}
+                  onClick={() => setShowCategoryFilter(p => !p)}
+                  className="px-3 py-1 rounded-full text-xs font-bold border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer flex items-center gap-1"
                 >
-                  {filter === 'all' ? 'All categories' : filter}
+                  {categoryFilter === 'all' ? 'All categories' : categoryFilter}
+                  {showCategoryFilter ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                 </button>
-              ))}
+                {categoryFilter !== 'all' && (
+                  <button onClick={() => setCategoryFilter('all')} className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer transition-colors">
+                    Clear
+                  </button>
+                )}
+              </div>
+              {showCategoryFilter && (
+                <div className="flex flex-wrap gap-2 animate-slide-in">
+                  <button
+                    onClick={() => { setCategoryFilter('all'); setShowCategoryFilter(false); }}
+                    className={`px-3 py-1 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                      categoryFilter === 'all'
+                        ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900 border-transparent shadow'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >All</button>
+                  {COMMENT_CATEGORIES.map((m) => (
+                    <button
+                      key={m.label}
+                      onClick={() => { setCategoryFilter(m.label); setShowCategoryFilter(false); }}
+                      className={`px-3 py-1 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                        categoryFilter === m.label ? `${m.badge} shadow-sm` : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {m.emoji} {m.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
           {/* Comments List */}
           <section className="space-y-4">
-            {filteredComments.length === 0 ? (
+            {sortedComments.length === 0 ? (
               <div className="glass-panel rounded-3xl p-12 text-center max-w-lg mx-auto space-y-4 animate-slide-in">
                 <div className="w-16 h-16 bg-slate-100 dark:bg-slate-900 rounded-2xl flex items-center justify-center mx-auto text-slate-400">
                   <MessageSquare className="w-8 h-8" />
@@ -325,19 +645,10 @@ export const AnalyzeVideoPage: React.FC = () => {
                 </p>
               </div>
             ) : (
-              filteredComments.map((comment) => {
-                const sentimentColors = {
-                  positive: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
-                  neutral: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20',
-                  negative: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
-                };
-
-                const categoryColors = {
-                  Question: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
-                  Feedback: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20',
-                  Spam: 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20',
-                  Appreciation: 'bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20'
-                };
+              sortedComments.map((comment) => {
+                const catMeta = getCategoryMeta(comment.category);
+                const sentMeta = SENTIMENT_META[comment.sentiment] ?? SENTIMENT_META.neutral;
+                const priMeta = comment.priorityTier ? PRIORITY_META[comment.priorityTier] : PRIORITY_META.medium;
 
                 return (
                   <div 
@@ -347,13 +658,17 @@ export const AnalyzeVideoPage: React.FC = () => {
                         ? 'border-emerald-500/20 dark:border-emerald-500/10 bg-emerald-500/5 dark:bg-emerald-950/5' 
                         : comment.status === 'ignored'
                         ? 'opacity-50 hover:opacity-80 border-slate-200 dark:border-slate-800'
-                        : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                        : `${priMeta.ring} hover:border-slate-350 dark:hover:border-slate-750`
                     }`}
                   >
-                    {/* Glowing side accent */}
-                    {comment.status === 'replied' && (
+                    {/* Glowing side accent for status & priority */}
+                    {comment.status === 'replied' ? (
                       <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-emerald-500"></div>
-                    )}
+                    ) : comment.priorityTier === 'highest' ? (
+                      <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-gradient-to-b from-red-500 to-orange-500"></div>
+                    ) : comment.priorityTier === 'high' ? (
+                      <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-gradient-to-b from-orange-500 to-amber-500"></div>
+                    ) : null}
 
                     <div className="flex flex-col gap-4">
                       {/* Comment Header info */}
@@ -365,22 +680,89 @@ export const AnalyzeVideoPage: React.FC = () => {
                             className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-800 object-cover"
                           />
                           <div>
-                            <span className="font-semibold text-sm text-slate-800 dark:text-slate-200">
-                              {comment.authorName}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-sm text-slate-800 dark:text-slate-200">
+                                {comment.authorName}
+                              </span>
+                              {comment.isVerified && (
+                                <span className="p-0.5 rounded-full bg-blue-500 text-white flex items-center justify-center" title="Verified Creator">
+                                  <UserCheck className="w-3 h-3" />
+                                </span>
+                              )}
+                            </div>
                             <span className="text-[10px] block text-slate-400 dark:text-slate-500 font-medium">
                               {comment.publishedAt}
                             </span>
                           </div>
                         </div>
 
-                        <div className="flex gap-2">
-                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${sentimentColors[comment.sentiment]}`}>
-                            {comment.sentiment}
+                        <div className="flex flex-wrap gap-1.5">
+                          {/* Priority Score badge */}
+                          {comment.priorityTier && (
+                            <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${priMeta.badge}`}>
+                              {priMeta.emoji} Priority: {priMeta.label} ({comment.priorityScore})
+                            </span>
+                          )}
+                          {comment.isPinned && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 flex items-center gap-1">
+                              <Pin className="w-3 h-3 fill-amber-500" />
+                              <span>Pinned</span>
+                            </span>
+                          )}
+                          {comment.isSuperThanks && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/20 flex items-center gap-1">
+                              <Heart className="w-3 h-3 fill-yellow-500 text-yellow-500 animate-pulse" />
+                              <span>Super Thanks</span>
+                            </span>
+                          )}
+                          {comment.isMember && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20 flex items-center gap-1">
+                              <Crown className="w-3 h-3 fill-violet-500 text-violet-500" />
+                              <span>Member</span>
+                            </span>
+                          )}
+                          {/* Phase 6 Sentiment badge */}
+                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${sentMeta.badge}`}>
+                            {sentMeta.emoji} {comment.sentiment.replace('_', ' ')}
+                            {comment.sentimentScore !== undefined && (
+                              <span className="ml-1 font-mono opacity-70">{comment.sentimentScore}</span>
+                            )}
                           </span>
-                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${categoryColors[comment.category]}`}>
-                            {comment.category}
+                          {/* Phase 5 Category badge */}
+                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${catMeta.badge}`}>
+                            {catMeta.emoji} {catMeta.label}
                           </span>
+                          {/* Phase 6 Emotion badge */}
+                          {comment.emotion && comment.emotion !== 'neutral' && (() => {
+                            const em = EMOTION_META[comment.emotion];
+                            return em ? (
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${em.badge}`}>
+                                {em.emoji} {comment.emotion}
+                              </span>
+                            ) : null;
+                          })()}
+                          {/* Thoughtful score badge */}
+                          {comment.thoughtfulnessScore !== undefined && comment.thoughtfulnessScore >= 75 && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20 flex items-center gap-1">
+                              <Award className="w-3 h-3 text-indigo-500" />
+                              <span>Thoughtful ({comment.thoughtfulnessScore})</span>
+                            </span>
+                          )}
+                          {/* Phase 8: Decision badge */}
+                          {(() => {
+                            const dec = (comment.aiDecision ?? 'reply') as DecisionAction;
+                            const dm = DECISION_META[dec];
+                            if (!dm) return null;
+                            return (
+                              <span
+                                className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border flex items-center gap-1 ${dm.badge}`}
+                                title={comment.aiDecisionReason ?? dm.description}
+                              >
+                                <Zap className="w-2.5 h-2.5" />
+                                <span>{dm.emoji} {dm.label}</span>
+                              </span>
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -407,26 +789,163 @@ export const AnalyzeVideoPage: React.FC = () => {
                         </div>
                       ) : (
                         <div className="space-y-3 mt-2 bg-slate-50/50 dark:bg-slate-900/50 border border-slate-200/50 dark:border-slate-800/80 rounded-2xl p-4 animate-slide-in">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1">
-                              <Sparkles className="w-3.5 h-3.5 text-primary-500" />
-                              <span>AI Draft Reply Suggestion</span>
-                            </span>
-                            {comment.category === 'Spam' && (
-                              <span className="text-[10px] text-rose-500 font-bold px-1.5 py-0.5 rounded bg-rose-500/10">
-                                Muted for Spam
-                              </span>
-                            )}
-                          </div>
+                          {/* Decision action header */}
+                          {(() => {
+                            const dec = (comment.aiDecision ?? 'reply') as DecisionAction;
+                            const dm = DECISION_META[dec];
+                            const isNonReply = dec === 'like' || dec === 'heart' || dec === 'hide' || dec === 'escalate' || dec === 'flag' || dec === 'ignore' || dec === 'review';
+                            return (
+                              <>
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                  <span className={`text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 px-2 py-1 rounded-lg border ${dm?.badge ?? ''}`}>
+                                    <Zap className="w-3.5 h-3.5" />
+                                    <span>AI Decision: {dm?.emoji} {dm?.label}</span>
+                                  </span>
+                                  {/* Override dropdown */}
+                                  <select
+                                    value={dec}
+                                    onChange={e => applyDecision(currentVideo.id, comment.id, e.target.value as DecisionAction)}
+                                    className="text-[10px] font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 cursor-pointer"
+                                  >
+                                    {ALL_DECISION_ACTIONS.map(a => {
+                                      const m = DECISION_META[a];
+                                      return <option key={a} value={a}>{m.emoji} {m.label}</option>;
+                                    })}
+                                  </select>
+                                </div>
+                                {comment.aiDecisionReason && (
+                                  <p className="text-[11px] text-slate-400 dark:text-slate-500 italic">
+                                    🤖 {comment.aiDecisionReason}
+                                  </p>
+                                )}
+                                {isNonReply && (
+                                  <div className={`flex items-center gap-2 p-3 rounded-xl border text-xs font-semibold ${dm?.badge ?? ''}`}>
+                                    <span className="text-base">{dm?.emoji}</span>
+                                    <span>{dm?.description} — no text reply needed.</span>
+                                  </div>
+                                )}
 
-                          <textarea
-                            value={comment.aiReply}
-                            onChange={(e) => updateReplyText(currentVideo.id, comment.id, e.target.value)}
-                            disabled={comment.category === 'Spam'}
-                            placeholder="Type a custom reply or draft response here..."
-                            rows={3}
-                            className="w-full px-4 py-3 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-600 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all rounded-xl resize-none disabled:opacity-50"
-                          />
+                                {/* Phase 9: Prompt Inspector accordion */}
+                                {(() => {
+                                  const inspectorOpen = showPromptInspector[comment.id] ?? false;
+                                  const personalityLabel = (() => {
+                                    const sp = getPersonalitySystemPrompt();
+                                    if (!sp) return 'None set';
+                                    if (sp.includes('[CREATOR VOICE')) return 'Custom creator voice';
+                                    const match = sp.match(/^You are a (.+?) YouTube/);
+                                    return match ? match[1] : 'Custom personality';
+                                  })();
+
+                                  return (
+                                    <div className="border border-slate-200/60 dark:border-slate-800/60 rounded-xl overflow-hidden">
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowPromptInspector(prev => ({
+                                          ...prev,
+                                          [comment.id]: !prev[comment.id]
+                                        }))}
+                                        className="w-full flex items-center justify-between px-3 py-2 bg-slate-50/60 dark:bg-slate-900/40 hover:bg-slate-100/60 dark:hover:bg-slate-800/40 transition-colors text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 cursor-pointer"
+                                      >
+                                        <span className="flex items-center gap-1.5">
+                                          <ScanSearch className="w-3 h-3 text-violet-400" />
+                                          🔍 Prompt Inspector — context used for this reply
+                                        </span>
+                                        {inspectorOpen
+                                          ? <ChevronUp className="w-3 h-3" />
+                                          : <ChevronDown className="w-3 h-3" />}
+                                      </button>
+                                      {inspectorOpen && (
+                                        <div className="px-3 py-3 space-y-2 bg-slate-950/5 dark:bg-slate-950/30 animate-slide-in">
+                                          {/* Context rows */}
+                                          {([
+                                            {
+                                              icon: '🎬',
+                                              label: 'Video Summary',
+                                              value: currentVideo.summary
+                                                ? currentVideo.summary.slice(0, 120) + (currentVideo.summary.length > 120 ? '…' : '')
+                                                : 'Not available',
+                                              present: !!currentVideo.summary,
+                                            },
+                                            {
+                                              icon: '🎭',
+                                              label: 'Creator Style',
+                                              value: personalityLabel,
+                                              present: !!getPersonalitySystemPrompt(),
+                                            },
+                                            {
+                                              icon: '🌐',
+                                              label: 'Language',
+                                              value: currentVideo.language ?? 'English',
+                                              present: true,
+                                            },
+                                            {
+                                              icon: '🏷️',
+                                              label: 'Comment Category',
+                                              value: comment.category,
+                                              present: true,
+                                            },
+                                            {
+                                              icon: '📋',
+                                              label: 'Channel Rules',
+                                              value: activePromptRules.length > 0
+                                                ? `${activePromptRules.length} rule${activePromptRules.length > 1 ? 's' : ''} active`
+                                                : 'No rules set',
+                                              present: activePromptRules.length > 0,
+                                            },
+                                            {
+                                              icon: '💬',
+                                              label: 'Previous Replies',
+                                              value: (comment.replies?.length ?? 0) > 0
+                                                ? `${comment.replies!.length} thread repl${comment.replies!.length > 1 ? 'ies' : 'y'} injected`
+                                                : 'No thread replies',
+                                              present: (comment.replies?.length ?? 0) > 0,
+                                            },
+                                          ] as { icon: string; label: string; value: string; present: boolean }[]).map(row => (
+                                            <div key={row.label} className="flex items-start gap-2">
+                                              <span className="text-sm flex-shrink-0 mt-px">{row.icon}</span>
+                                              <div className="flex-1 min-w-0">
+                                                <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">
+                                                  {row.label}
+                                                </span>
+                                                <span className={`text-[11px] font-semibold leading-snug block ${
+                                                  row.present
+                                                    ? 'text-slate-700 dark:text-slate-300'
+                                                    : 'text-slate-400 dark:text-slate-600 italic'
+                                                }`}>
+                                                  {row.value}
+                                                </span>
+                                              </div>
+                                              <span className={`text-[10px] mt-0.5 flex-shrink-0 ${row.present ? 'text-emerald-500' : 'text-slate-400'}`}>
+                                                {row.present ? '✓' : '—'}
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </>
+                            );
+                          })()}
+
+                          {/* Only show textarea for reply/escalate decisions */}
+                          {(() => {
+                            const dec = (comment.aiDecision ?? 'reply') as DecisionAction;
+                            const showTextarea = dec === 'reply' || dec === 'escalate' || !comment.aiDecision;
+                            if (!showTextarea) return null;
+                            return (
+                              <textarea
+                                value={comment.aiReply}
+                                onChange={(e) => updateReplyText(currentVideo.id, comment.id, e.target.value)}
+                                disabled={comment.category === 'Spam'}
+                                maxLength={1000}
+                                placeholder="Type a custom reply or draft response here..."
+                                rows={3}
+                                className="w-full px-4 py-3 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-600 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all rounded-xl resize-none disabled:opacity-50"
+                              />
+                            );
+                          })()}
 
                           <div className="flex flex-wrap gap-2 justify-end">
                             <button
@@ -439,21 +958,78 @@ export const AnalyzeVideoPage: React.FC = () => {
                             {comment.category !== 'Spam' && (
                               <>
                                 <button
+                                  onClick={() => handleCopyReply(comment.id, comment.aiReply)}
+                                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                                    copiedCommentId === comment.id
+                                      ? 'text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 bg-emerald-500/10'
+                                      : 'text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900'
+                                  }`}
+                                  aria-label="Copy reply text to clipboard"
+                                  title="Copy reply as plain text"
+                                >
+                                  {copiedCommentId === comment.id
+                                    ? <ClipboardCheck className="w-3.5 h-3.5" />
+                                    : <Copy className="w-3.5 h-3.5" />}
+                                  <span>{copiedCommentId === comment.id ? 'Copied!' : 'Copy'}</span>
+                                </button>
+                                <button
                                   onClick={() => regenerateReply(currentVideo.id, comment.id)}
                                   className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 transition-all cursor-pointer flex items-center gap-1.5"
                                 >
-                                  <RefreshCw className="w-3.5 h-3.5" />
-                                  <span>Regenerate</span>
+                                  {approvalMode === 'suggestion' && !comment.aiReply ? (
+                                    <>
+                                      <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                                      <span>Draft AI Reply</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <RefreshCw className="w-3.5 h-3.5" />
+                                      <span>Regenerate</span>
+                                    </>
+                                  )}
                                 </button>
                                 <button
-                                  onClick={() => approveReply(currentVideo.id, comment.id, comment.aiReply)}
+                                  onClick={() => handleApproveClick(comment)}
                                   className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-emerald-600 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer flex items-center gap-1.5"
                                 >
                                   <Send className="w-3.5 h-3.5" />
-                                  <span>Approve & Post</span>
+                                  <span>Approve &amp; Post</span>
                                 </button>
                               </>
                             )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Nested Replies Section */}
+                      {comment.replies && comment.replies.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800/85 space-y-3.5 pl-4 md:pl-8">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">
+                            Thread Replies ({comment.replies.length})
+                          </span>
+                          <div className="space-y-3">
+                            {comment.replies.map((reply) => (
+                              <div key={reply.id} className="flex gap-3 items-start animate-slide-in">
+                                <img
+                                  src={reply.authorAvatar}
+                                  alt={reply.authorName}
+                                  className="w-7 h-7 rounded-full border border-slate-200 dark:border-slate-800 object-cover flex-shrink-0"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                                    <span className="font-semibold text-xs text-slate-700 dark:text-slate-350">
+                                      {reply.authorName}
+                                    </span>
+                                    <span className="text-[9px] text-slate-400 dark:text-slate-500 font-mono">
+                                      {reply.publishedAt}
+                                    </span>
+                                  </div>
+                                  <p className="text-slate-600 dark:text-slate-400 text-xs font-semibold leading-relaxed">
+                                    {reply.text}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}
@@ -482,6 +1058,104 @@ export const AnalyzeVideoPage: React.FC = () => {
             </p>
           </div>
         </section>
+      )}
+
+      {feedbackTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-lg w-full space-y-6 shadow-2xl animate-scale-in">
+            <div className="flex items-center gap-3 border-b border-slate-100 dark:border-slate-800/60 pb-3">
+              <div className="p-2.5 rounded-xl bg-primary-500/10 text-primary-500">
+                <Brain className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-heading font-extrabold text-lg text-slate-950 dark:text-white">
+                  Calibration Memory Feedback
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-0.5">
+                  Engage AI detected edits. Save this correction to calibrate future prompts.
+                </p>
+              </div>
+            </div>
+
+            {/* Stars selector */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 block">
+                How would you rate the draft suggestion?
+              </label>
+              <div className="flex items-center gap-2">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => setFeedbackRating(star)}
+                    className="text-slate-300 dark:text-slate-700 hover:scale-110 active:scale-95 transition-transform cursor-pointer border-none bg-transparent"
+                  >
+                    <Star 
+                      className={`w-7 h-7 ${
+                        star <= feedbackRating 
+                          ? 'fill-amber-500 text-amber-500' 
+                          : 'text-slate-300 dark:text-slate-800'
+                      }`} 
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Reason selector */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 block">
+                Primary Reason for edits?
+              </label>
+              <select
+                value={feedbackReason}
+                onChange={(e) => setFeedbackReason(e.target.value)}
+                className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-sm font-semibold rounded-xl focus:outline-none cursor-pointer"
+              >
+                <option value="Too formal">Too formal (Sounds like corporate speech)</option>
+                <option value="Too informal">Too informal (Slang or emoji overload)</option>
+                <option value="Incorrect details">Incorrect details (Wrong facts/features)</option>
+                <option value="Wrong tone">Wrong tone (Mismatch with comment sentiment)</option>
+                <option value="Other">Other / Appended links & signatures</option>
+              </select>
+            </div>
+
+            {/* Diff comparisons view */}
+            <div className="space-y-2">
+              <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 block">
+                Diff comparisons preview
+              </label>
+              <div className="space-y-2 text-xs border border-slate-200/50 dark:border-slate-800/80 rounded-2xl p-4 bg-slate-50/50 dark:bg-slate-900/30 max-h-[140px] overflow-y-auto">
+                <div>
+                  <span className="text-[9px] font-bold text-rose-500 uppercase tracking-wider block">Original Proposal:</span>
+                  <p className="text-slate-500 dark:text-slate-400 font-semibold">{feedbackTarget.originalReply}</p>
+                </div>
+                <div className="mt-2 pt-2 border-t border-slate-200/60 dark:border-slate-800/60">
+                  <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-wider block">Your Edited Version:</span>
+                  <p className="text-slate-800 dark:text-slate-200 font-bold">{feedbackTarget.editedReply}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Form actions */}
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800/60">
+              <button
+                type="button"
+                onClick={() => handleSubmitFeedback(true)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors cursor-pointer border-none bg-transparent"
+              >
+                Skip Feedback
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSubmitFeedback(false)}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-primary-500 hover:bg-primary-600 shadow-md cursor-pointer transition-colors border-none"
+              >
+                Submit & Post
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {toast && (

@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../hooks/useTheme';
+import { useDashboard } from '../contexts/DashboardContext';
 import { 
   LayoutDashboard, 
   Video, 
-  History, 
   Settings, 
   LogOut, 
   Menu, 
@@ -13,7 +13,14 @@ import {
   Sun, 
   Moon,
   Youtube,
-  User
+  User,
+  MessageSquare,
+  BarChart2,
+  Brain,
+  Megaphone,
+  Sparkles,
+  Tag,
+  CreditCard
 } from 'lucide-react';
 
 interface DashboardLayoutProps {
@@ -23,6 +30,7 @@ interface DashboardLayoutProps {
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
   const { currentUser, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { globalBroadcast } = useDashboard();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
 
@@ -36,9 +44,14 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
 
   const menuItems = [
     { name: 'Dashboard', icon: LayoutDashboard, path: '/', active: location.pathname === '/', disabled: false },
-    { name: 'Analyze Video', icon: Video, path: '/analyze', active: location.pathname === '/analyze', disabled: false },
-    { name: 'History', icon: History, path: '/history', active: location.pathname === '/history', disabled: true, tooltip: 'Coming in Phase 2' },
-    { name: 'Settings', icon: Settings, path: '/settings', active: location.pathname === '/settings', disabled: true, tooltip: 'Coming in Phase 2' },
+    { name: 'Videos', icon: Video, path: '/analyze', active: location.pathname === '/analyze', disabled: false },
+    { name: 'Live', icon: MessageSquare, path: '/live', active: location.pathname === '/live', disabled: false },
+    { name: 'Comments', icon: Tag, path: '/categorize', active: location.pathname === '/categorize', disabled: false },
+    { name: 'Analytics', icon: BarChart2, path: '/analytics', active: location.pathname === '/analytics', disabled: false },
+    { name: 'Settings', icon: Settings, path: '/settings', active: location.pathname === '/settings', disabled: false },
+    { name: 'AI Personality', icon: Sparkles, path: '/personality', active: location.pathname === '/personality', disabled: false },
+    { name: 'Knowledge Base', icon: Brain, path: '/learning', active: location.pathname === '/learning', disabled: false },
+    { name: 'Billing', icon: CreditCard, path: '/billing', active: location.pathname === '/billing', disabled: false },
   ];
 
   return (
@@ -85,7 +98,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
                 <div 
                   key={index}
                   className="flex items-center justify-between px-4 py-3 rounded-xl text-slate-400 dark:text-slate-600 select-none opacity-60 relative group"
-                  title={item.tooltip}
+                  title={item.name}
                 >
                   <div className="flex items-center gap-3.5">
                     <Icon className="w-5 h-5" />
@@ -209,6 +222,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) =>
             )}
           </div>
         </header>
+
+        {/* Global System announcement broadcast banner */}
+        {globalBroadcast && (
+          <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold text-xs px-6 py-3 flex items-center justify-between gap-4 animate-slide-in shadow-md">
+            <div className="flex items-center gap-2 min-w-0">
+              <Megaphone className="w-4 h-4 animate-bounce flex-shrink-0" />
+              <span className="truncate">{globalBroadcast}</span>
+            </div>
+          </div>
+        )}
 
         {/* Content Body */}
         <main className="flex-1 overflow-y-auto p-6 md:p-8">

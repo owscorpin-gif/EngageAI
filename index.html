@@ -4,10 +4,77 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
-    <!-- SEO Meta Tags -->
-    <title>AI YouTube Comment Manager - Dashboard</title>
-    <meta name="description" content="Manage and automate YouTube engagement with AI. Phase 1 Dashboard and Authentication." />
+
+    <!--
+      ════════════════════════════════════════════════════════════════════════
+      SECURITY HEADERS (Phase 7 — Login Replay Protection)
+      ════════════════════════════════════════════════════════════════════════
+
+      NOTE: HTTP response headers (X-Frame-Options, Strict-Transport-Security,
+      X-Content-Type-Options) must be set by the hosting server or CDN — they
+      cannot be enforced by HTML meta tags alone. Add these to your server:
+
+        Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+        X-Frame-Options: DENY
+        X-Content-Type-Options: nosniff
+        Referrer-Policy: strict-origin-when-cross-origin
+        Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+      The Content-Security-Policy below IS enforced by the browser via meta tag.
+      ════════════════════════════════════════════════════════════════════════
+    -->
+
+    <!--
+      Content-Security-Policy
+      ────────────────────────
+      • default-src 'self'          — only load resources from same origin
+      • script-src  'self'          — no inline scripts, no eval()
+      • style-src   'self' 'unsafe-inline' fonts.googleapis.com
+                                    — CSS in <style> tags + Google Fonts
+      • font-src    fonts.gstatic.com
+                                    — Google Fonts glyphs
+      • img-src     'self' data: https:
+                                    — allow HTTPS images (Unsplash, YouTube thumbs)
+      • connect-src 'self' https://*.googleapis.com https://*.firebaseio.com
+                    https://identitytoolkit.googleapis.com
+                    https://securetoken.googleapis.com
+                                    — Firebase Auth API endpoints only
+      • frame-src   'none'          — no iframes
+      • object-src  'none'          — no Flash/plugin objects
+      • base-uri    'self'          — prevent base-tag hijacking
+      • form-action 'self'          — forms can only submit to same origin
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src https://fonts.gstatic.com;
+      img-src 'self' data: https:;
+      connect-src 'self'
+        https://*.googleapis.com
+        https://*.firebaseio.com
+        https://identitytoolkit.googleapis.com
+        https://securetoken.googleapis.com
+        https://*.supabase.co
+        ws://localhost:*
+        ws://127.0.0.1:*;
+      frame-src 'none';
+      object-src 'none';
+      base-uri 'self';
+      form-action 'self';
+    " />
+
+    <!-- Prevent MIME-type sniffing (belt-and-suspenders for older browsers) -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+
+    <!-- Prevent clickjacking via framing (belt-and-suspenders) -->
+    <meta http-equiv="X-Frame-Options" content="DENY" />
+
+    <!-- Control referrer information sent to third parties -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+    <title>Engage AI - AI YouTube Creator Engagement Suite &amp; Live Assistant Manager</title>
+    <meta name="description" content="Automate audience engagement using context-aware AI replies, real-time live chat moderation, Super Chat analytics tracking, and prompt calibration feedback." />
     
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">

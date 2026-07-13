@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
+import { validateInput, ThemeSchema } from '../utils/validation';
 
 export function useTheme() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    // Validate the stored theme value against the ThemeSchema enum
+    // to prevent arbitrary strings from being injected via localStorage.
     const stored = localStorage.getItem('engage_ai_theme');
-    if (stored === 'light' || stored === 'dark') {
-      return stored;
+    const validation = validateInput(ThemeSchema, stored);
+    if (validation.success) {
+      return validation.data;
     }
     const systemPreference = window.matchMedia('(prefers-color-scheme: dark)').matches;
     return systemPreference ? 'dark' : 'light';

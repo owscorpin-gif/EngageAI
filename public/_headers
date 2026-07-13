@@ -1,0 +1,36 @@
+/*
+ * _headers — Netlify / Cloudflare Pages Security Headers
+ *
+ * These HTTP response headers are enforced by the CDN/hosting layer and
+ * cannot be set via HTML meta tags alone. Copy this file to your project
+ * root for Netlify deployments, or configure equivalent rules for your
+ * hosting provider.
+ *
+ * Firebase Hosting equivalent → firebase.json (headers array)
+ * Vercel equivalent           → vercel.json (headers array)
+ * Nginx equivalent            → add_header directives in server block
+ */
+
+/*
+  Apply to all routes
+*/
+/api/*
+  # Force HTTPS for 1 year + preload list inclusion
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+
+  # Cookie security (for any server-side cookies):
+  #   Set-Cookie: session=...; Secure; HttpOnly; SameSite=Strict; Path=/
+  # This is enforced at the API/backend layer — documented here for reference.
+
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self';

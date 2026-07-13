@@ -12,6 +12,19 @@ dist
 dist-ssr
 *.local
 
+# ─── Environment variables (NEVER commit real credentials) ─────────────────────
+# Only .env.example (placeholder values) should be committed.
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.staging
+.env.staging.local
+.env.test
+.env.test.local
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,3 +35,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ─── Generated docs assets (large binaries — use Google Docs link instead) ────
+docs_images/
+*.docx

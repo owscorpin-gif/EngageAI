@@ -1,4 +1,29 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { extractYoutubeVideoId } from '../utils/urlHelper';
+import {
+  safeParseStorage,
+  validateInput,
+  AnalyzedVideoSchema,
+  LearningFeedbackSchema,
+  PromptRulesArraySchema,
+  YouTubeUrlSchema,
+  PromptRuleSchema,
+  GlobalBroadcastSchema,
+} from '../utils/validation';
+import { z } from 'zod';
+import { fetchVideoDetails, fetchComments, postYouTubeReply } from '../services/youtube';
+import { generateGeminiReply, analyzeVideoMetadata, analyzeAndDraftReplies } from '../services/gemini';
+import { useAuth } from './AuthContext';
+import type { CommentCategory, SentimentScore, EmotionType, PriorityTier, DecisionAction } from '../utils/commentMeta';
+import { computePriorityScore, computeDecision } from '../utils/commentMeta';
+
+export interface CommentReply {
+  id: string;
+  authorName: string;
+  authorAvatar: string;
+  text: string;
+  publishedAt: string;
+}
 
 export interface Comment {
   id: string;
@@ -6,11 +31,44 @@ export interface Comment {
   authorAvatar: string;
   text: string;
   publishedAt: string;
-  sentiment: 'positive' | 'neutral' | 'negative';
-  category: 'Question' | 'Feedback' | 'Spam' | 'Appreciation';
+  /** Phase 6: 5-way sentiment score */
+  sentiment: SentimentScore;
+  /** Phase 6: detected emotion */
+  emotion?: EmotionType;
+  /** Phase 6: 0-100 confidence score for sentiment */
+  sentimentScore?: number;
+  /** Phase 5: 17-category classification */
+  category: CommentCategory;
+  
+  // Phase 7: Priority Score
+  priorityScore?: number;
+  priorityTier?: PriorityTier;
+  isSuperThanks?: boolean;
+  isMember?: boolean;
+  isVerified?: boolean;
+  thoughtfulnessScore?: number;
+
+  // Phase 8: Decision Engine
+  aiDecision?: DecisionAction;
+  aiDecisionReason?: string;
+
   aiReply: string;
+  originalAiReply?: string;
   status: 'pending' | 'replied' | 'ignored';
   repliedText?: string;
+  replies?: CommentReply[];
+  isPinned?: boolean;
+  orderType?: 'top' | 'newest';
+}
+
+export interface LearningFeedback {
+  id: string;
+  commentText: string;
+  originalReply: string;
+  editedReply: string;
+  reason: string;
+  rating: number;
+  submittedAt: string;
 }
 
 export interface AnalyzedVideo {
@@ -23,6 +81,14 @@ export interface AnalyzedVideo {
   publishedAt: string;
   comments: Comment[];
   analyzedAt: string;
+  // Optional enriched fields from Gemini video analysis
+  description?: string;
+  transcript?: string;
+  category?: string;
+  keywords?: string[];
+  summary?: string;
+  mainTopic?: string;
+  language?: string;
 }
 
 interface KPIStats {
@@ -32,121 +98,151 @@ interface KPIStats {
   pendingReviews: number;
 }
 
+export type ApprovalMode = 'auto' | 'approve' | 'suggestion';
+
 interface DashboardContextType {
   analyzedVideos: AnalyzedVideo[];
   currentVideo: AnalyzedVideo | null;
   kpis: KPIStats;
   isAnalyzing: boolean;
-  autoPilotActive: boolean;
+  approvalMode: ApprovalMode;
+  feedbacks: LearningFeedback[];
+  activePromptRules: string[];
+  globalBroadcast: string | null;
+  setGlobalBroadcast: (msg: string | null) => void;
   analyzeVideo: (url: string) => Promise<void>;
-  approveReply: (videoId: string, commentId: string, replyText: string) => void;
+  approveReply: (videoId: string, commentId: string, replyText: string) => Promise<void>;
   ignoreComment: (videoId: string, commentId: string) => void;
   regenerateReply: (videoId: string, commentId: string) => void;
   updateReplyText: (videoId: string, commentId: string, text: string) => void;
   clearVideo: (videoId: string) => void;
-  toggleAutoPilot: () => void;
+  setApprovalMode: (mode: ApprovalMode) => void;
   setCurrentVideoById: (id: string) => void;
+  submitFeedback: (feedback: Omit<LearningFeedback, 'id' | 'submittedAt'>) => void;
+  addPromptRule: (rule: string) => void;
+  removePromptRule: (rule: string) => void;
+  /** Phase 5 & 6: Re-classify all comments for a video with full 17-cat + emotion */
+  reclassifyComments: (videoId: string) => Promise<void>;
+  /** Phase 8: Override/apply a decision action for a specific comment */
+  applyDecision: (videoId: string, commentId: string, decision: DecisionAction, reason?: string) => void;
 }
 
 const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
 
-const PRESET_MOCK_VIDEOS: Record<string, Omit<AnalyzedVideo, 'comments' | 'analyzedAt'>> = {
-  'dQw4w9WgXcQ': {
-    id: 'dQw4w9WgXcQ',
-    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-    title: 'Rick Astley - Never Gonna Give You Up (Official Music Video)',
-    channelTitle: 'Rick Astley',
-    thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg',
-    views: '1.4B views',
-    publishedAt: '16 years ago'
-  },
-  'v8n43Ssd114': {
-    id: 'v8n43Ssd114',
-    url: 'https://www.youtube.com/watch?v=v8n43Ssd114',
-    title: 'Is this new AI framework actually good? | Hands-on Review',
-    channelTitle: 'Fireship.io',
-    thumbnail: 'https://images.unsplash.com/photo-1618401471353-b98aedd07871?w=480&auto=format&fit=crop&q=80',
-    views: '245K views',
-    publishedAt: '2 days ago'
-  }
-};
 
-const MOCK_COMMENTS_TEMPLATES = [
-  {
-    authorName: 'Alex Johnson',
-    authorAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80',
-    text: 'Can you explain how the authentication middleware is secured? I am trying to implement this in my own production app.',
-    sentiment: 'neutral' as const,
-    category: 'Question' as const,
-    replies: [
-      'Hi Alex! The authentication middleware is secured using Firebase JWT token validation. Let me know if you need code snippets!',
-      'Great question Alex! We validate the token sent in the authorization header using firebase-admin. Let me know if you want the setup guide.'
-    ]
-  },
-  {
-    authorName: 'Sarah Miller',
-    authorAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80',
-    text: 'Absolutely love this walkthrough! Simple, clear, and very well edited. Subscribed immediately!',
-    sentiment: 'positive' as const,
-    category: 'Appreciation' as const,
-    replies: [
-      'Thank you so much, Sarah! Appreciate the support and welcome to the channel!',
-      'Thanks Sarah! Glad you found it helpful. More content coming soon!'
-    ]
-  },
-  {
-    authorName: 'Dev_Guru_99',
-    authorAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=100&auto=format&fit=crop&q=80',
-    text: 'Great video, but there is a bug in the styling of the mobile menu. It overlaps the main heading when resized below 640px.',
-    sentiment: 'negative' as const,
-    category: 'Feedback' as const,
-    replies: [
-      'Thanks for pointing that out! I will look into the CSS for the mobile layout and push a fix. Appreciate the feedback.',
-      'Aha! Good catch on the responsive break. I will update the Tailwind classes shortly.'
-    ]
-  },
-  {
-    authorName: 'CryptoMoonBot',
-    authorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80',
-    text: 'Make 500$ daily easily! Click my channel link for free binary trading signal bots, 100% legit and approved!',
-    sentiment: 'neutral' as const,
-    category: 'Spam' as const,
-    replies: [
-      '[Draft Muted: Comment classified as Spam. Auto-respond disabled.]'
-    ]
-  },
-  {
-    authorName: 'Michael Chang',
-    authorAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80',
-    text: 'When is the next episode coming out? You mentioned a part 2 on database integration and hosting.',
-    sentiment: 'neutral' as const,
-    category: 'Question' as const,
-    replies: [
-      'Hi Michael! Part 2 is currently in production and is scheduled to launch next Tuesday. Stay tuned!',
-      'Hey Michael! I am working on the database integration video now. Hoping to post it by early next week!'
-    ]
-  },
-  {
-    authorName: 'Emily Taylor',
-    authorAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&auto=format&fit=crop&q=80',
-    text: 'The best explanation of this topic on the entire platform. The visual animations really helped me grasp the state management.',
-    sentiment: 'positive' as const,
-    category: 'Appreciation' as const,
-    replies: [
-      'Wow, thank you Emily! It took a lot of time to make those animations, so I am thrilled they helped!',
-      'Thanks Emily! Visual learning is super important, glad it resonated with you!'
-    ]
-  }
-];
 
 export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  useAuth(); // ensure auth context is present
+  
   const [analyzedVideos, setAnalyzedVideos] = useState<AnalyzedVideo[]>(() => {
-    const saved = localStorage.getItem('engage_ai_videos');
-    return saved ? JSON.parse(saved) : [];
+    const stored = safeParseStorage(
+      'engage_ai_videos',
+      z.array(AnalyzedVideoSchema),
+      []
+    );
+    if (stored.length === 0) {
+      return [];
+    }
+    return stored;
   });
-  const [currentVideo, setCurrentVideo] = useState<AnalyzedVideo | null>(null);
+
+  const [feedbacks, setFeedbacks] = useState<LearningFeedback[]>(() =>
+    safeParseStorage(
+      'engage_ai_learning_feedbacks',
+      z.array(LearningFeedbackSchema),
+      []
+    )
+  );
+
+  const [activePromptRules, setActivePromptRules] = useState<string[]>(() =>
+    safeParseStorage(
+      'engage_ai_prompt_rules',
+      PromptRulesArraySchema,
+      [
+        'Avoid emojis for critical feedback responses',
+        'Keep educational breakdowns below 3 sentences',
+        'Neutral responses must not sound overly enthusiastic'
+      ]
+    )
+  );
+
+  useEffect(() => {
+    localStorage.setItem('engage_ai_learning_feedbacks', JSON.stringify(feedbacks));
+  }, [feedbacks]);
+
+  useEffect(() => {
+    localStorage.setItem('engage_ai_prompt_rules', JSON.stringify(activePromptRules));
+  }, [activePromptRules]);
+
+  const submitFeedback = (fb: Omit<LearningFeedback, 'id' | 'submittedAt'>) => {
+    const newFeedback: LearningFeedback = {
+      ...fb,
+      id: `fb-${Date.now()}`,
+      submittedAt: new Date().toLocaleString()
+    };
+    setFeedbacks(prev => [newFeedback, ...prev]);
+
+    // Simple heuristic to dynamically formulate prompt tuning recommendations:
+    if (fb.rating <= 2) {
+      let derivedRule = '';
+      if (fb.reason === 'Too formal') {
+        derivedRule = 'Adopt a warmer, more casual phrasing for casual viewers.';
+      } else if (fb.reason === 'Wrong tone') {
+        derivedRule = 'Align response sentiments strictly to comment contexts.';
+      } else if (fb.reason === 'Incorrect details') {
+        derivedRule = 'Double check video analysis data parameters before listing stats.';
+      } else if (fb.reason === 'Too informal') {
+        derivedRule = 'Elevate vocabulary and avoid slang elements.';
+      }
+      
+      if (derivedRule && !activePromptRules.includes(derivedRule)) {
+        setActivePromptRules(prev => [...prev, derivedRule]);
+      }
+    }
+  };
+
+  const addPromptRule = (rule: string) => {
+    const validation = validateInput(PromptRuleSchema, rule);
+    if (!validation.success) {
+      if (import.meta.env.DEV) {
+        console.warn('[Validation] addPromptRule rejected:', validation.error);
+      }
+      return;
+    }
+    const trimmed = validation.data;
+    if (!activePromptRules.includes(trimmed)) {
+      setActivePromptRules(prev => [...prev, trimmed]);
+    }
+  };
+
+  const removePromptRule = (rule: string) => {
+    setActivePromptRules(prev => prev.filter(r => r !== rule));
+  };
+  const [currentVideo, setCurrentVideo] = useState<AnalyzedVideo | null>(() => {
+    const stored = safeParseStorage('engage_ai_videos', z.array(AnalyzedVideoSchema), []);
+    return stored.length > 0 ? stored[0] : null;
+  });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [autoPilotActive, setAutoPilotActive] = useState(false);
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>('approve');
+  
+  const [globalBroadcast, setGlobalBroadcastState] = useState<string | null>(() => {
+    const raw = localStorage.getItem('engage_ai_global_broadcast');
+    if (!raw) return null;
+    const validation = validateInput(GlobalBroadcastSchema, raw);
+    return validation.success ? validation.data : null;
+  });
+
+  const setGlobalBroadcast = (msg: string | null) => {
+    if (msg !== null) {
+      const validation = validateInput(GlobalBroadcastSchema, msg);
+      if (!validation.success) return; // reject invalid broadcasts silently
+      setGlobalBroadcastState(validation.data);
+      localStorage.setItem('engage_ai_global_broadcast', validation.data);
+    } else {
+      setGlobalBroadcastState(null);
+      localStorage.removeItem('engage_ai_global_broadcast');
+    }
+  };
 
   // Keep localStorage in sync
   useEffect(() => {
@@ -180,87 +276,182 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Helper to extract video ID
   const extractVideoId = (url: string): string => {
-    const regExp = /^(?:https?:\/\/)?(?:www\.)?(?:m\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([a-zA-Z0-9_-]{11})/;
-    const match = url.trim().match(regExp);
-    return match ? match[1] : 'default_id';
+    return extractYoutubeVideoId(url) || 'default_id';
   };
 
   const analyzeVideo = async (url: string) => {
-    setIsAnalyzing(true);
-    // Simulate API fetch delay
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    const videoId = extractVideoId(url);
-    const existing = analyzedVideos.find(v => v.id === videoId);
-
-    if (existing) {
-      setCurrentVideo(existing);
-      setIsAnalyzing(false);
-      return;
+    // Validate the URL with Zod before any processing
+    const urlValidation = validateInput(YouTubeUrlSchema, url);
+    if (!urlValidation.success) {
+      throw new Error(urlValidation.error);
     }
 
-    // Generate new video metadata
-    const preset = PRESET_MOCK_VIDEOS[videoId];
-    const newVideoMeta = preset || {
-      id: videoId,
-      url,
-      title: `Full-Stack Tutorial: Master AI Workflows and Real-Time Databases (Video ID: ${videoId})`,
-      channelTitle: 'CodeCraft Academics',
-      thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
-      views: '54K views',
-      publishedAt: '3 hours ago'
-    };
+    setIsAnalyzing(true);
 
-    // Generate unique mock comments for this video
-    const generatedComments: Comment[] = MOCK_COMMENTS_TEMPLATES.map((tmpl, index) => ({
-      id: `${videoId}-comment-${index}`,
-      authorName: tmpl.authorName,
-      authorAvatar: tmpl.authorAvatar,
-      text: tmpl.text,
-      publishedAt: `${index * 12 + 5} mins ago`,
-      sentiment: tmpl.sentiment,
-      category: tmpl.category,
-      aiReply: tmpl.replies[0],
-      status: 'pending'
-    }));
+    try {
+      const videoId = extractVideoId(urlValidation.data);
+      const existing = analyzedVideos.find(v => v.id === videoId);
 
-    const newVideo: AnalyzedVideo = {
-      ...newVideoMeta,
-      comments: generatedComments,
-      analyzedAt: new Date().toISOString()
-    };
+      if (existing) {
+        setCurrentVideo(existing);
+        setIsAnalyzing(false);
+        return;
+      }
 
-    setAnalyzedVideos(prev => [newVideo, ...prev]);
-    setCurrentVideo(newVideo);
-    setIsAnalyzing(false);
-  };
+      // Fetch real video metadata and comments using YouTube API
+      const apiKey = localStorage.getItem('engage_ai_youtube_api_key') || '';
+      if (!apiKey) {
+        throw new Error('YouTube API key not set. Please add it in Settings.');
+      }
+      const videoMeta = await fetchVideoDetails(videoId, apiKey);
 
-  const approveReply = (videoId: string, commentId: string, replyText: string) => {
-    setAnalyzedVideos(prev => prev.map(video => {
-      if (video.id !== videoId) return video;
-      
-      const updatedComments = video.comments.map(c => {
-        if (c.id !== commentId) return c;
-        return {
+      // Analyze metadata with Gemini to produce context details (transcript, category, keywords, summary, main topic, language)
+      const analysis = await analyzeVideoMetadata(videoMeta.title, videoMeta.description, videoMeta.tags);
+
+      const fetchedComments = await fetchComments(videoId, apiKey);
+
+      // Draft context-aware AI replies and classify comments in a single batch
+      const draftedComments = await analyzeAndDraftReplies(fetchedComments, {
+        title: videoMeta.title,
+        description: videoMeta.description,
+        transcript: analysis.transcript,
+        category: analysis.category,
+        keywords: analysis.keywords,
+        summary: analysis.summary,
+        mainTopic: analysis.mainTopic,
+        language: analysis.language,
+        channelRules: activePromptRules,
+        pastLearnings: feedbacks,
+      }, approvalMode);
+
+      const processedComments = draftedComments.map((c, idx) => {
+        const textLower = c.text.toLowerCase();
+        const isSuperThanks = (textLower.includes('thank') || textLower.includes('love') || textLower.includes('awesome') || textLower.includes('super') || textLower.includes('support')) && idx % 7 === 3;
+        const isMember = idx % 5 === 1;
+        const isVerified = idx % 6 === 2;
+
+        const enriched = {
           ...c,
-          status: 'replied' as const,
-          repliedText: replyText
+          isSuperThanks,
+          isMember,
+          isVerified
+        };
+
+        const { score, tier } = computePriorityScore(enriched.category, {
+          isSuperThanks: enriched.isSuperThanks,
+          isMember: enriched.isMember,
+          isPinned: enriched.isPinned,
+          isVerified: enriched.isVerified,
+          textLength: enriched.text.length,
+          sentiment: enriched.sentiment,
+          thoughtfulnessScore: enriched.thoughtfulnessScore,
+        });
+
+        // Phase 8: compute decision — use Gemini aiDecision if present, else deterministic
+        const localDecision = computeDecision(
+          enriched.category, tier, enriched.sentiment,
+          enriched.isMember, enriched.isSuperThanks, enriched.isVerified, enriched.thoughtfulnessScore
+        );
+
+        return {
+          ...enriched,
+          originalAiReply: enriched.aiReply,
+          priorityScore: score,
+          priorityTier: tier,
+          aiDecision: (enriched as any).aiDecision ?? localDecision.action,
+          aiDecisionReason: (enriched as any).aiDecisionReason ?? localDecision.reason,
         };
       });
 
-      return { ...video, comments: updatedComments };
-    }));
-
-    // Sync current active video
-    setCurrentVideo(prev => {
-      if (!prev || prev.id !== videoId) return prev;
-      return {
-        ...prev,
-        comments: prev.comments.map(c => 
-          c.id === commentId ? { ...c, status: 'replied' as const, repliedText: replyText } : c
-        )
+      const newVideo: AnalyzedVideo = {
+        id: videoId,
+        url,
+        title: videoMeta.title,
+        channelTitle: videoMeta.channelTitle,
+        thumbnail: videoMeta.thumbnail,
+        views: videoMeta.views,
+        publishedAt: videoMeta.publishedAt,
+        comments: processedComments,
+        analyzedAt: new Date().toISOString(),
+        description: videoMeta.description,
+        transcript: analysis.transcript,
+        category: analysis.category,
+        keywords: analysis.keywords,
+        summary: analysis.summary,
+        mainTopic: analysis.mainTopic,
+        language: analysis.language
       };
-    });
+
+      setAnalyzedVideos(prev => [newVideo, ...prev]);
+      setCurrentVideo(newVideo);
+    } catch (error) {
+      console.error('Error analyzing video:', error);
+      throw error;
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const approveReply = async (videoId: string, commentId: string, replyText: string) => {
+    const youtubeApiKey = localStorage.getItem('engage_ai_youtube_api_key') || '';
+    if (!youtubeApiKey) {
+      console.error('No YouTube API key set. Configure it in Settings.');
+      return;
+    }
+
+    const video = analyzedVideos.find(v => v.id === videoId);
+    const comment = video?.comments.find(c => c.id === commentId);
+
+    // Phase 14: Learning System — capture edits
+    if (comment && comment.originalAiReply && comment.originalAiReply !== replyText) {
+      submitFeedback({
+        commentText: comment.text,
+        originalReply: comment.originalAiReply,
+        editedReply: replyText,
+        reason: 'Creator manually edited AI draft before posting.',
+        rating: 5
+      });
+    }
+
+    try {
+      const newReply = await postYouTubeReply(commentId, replyText, youtubeApiKey);
+
+      setAnalyzedVideos(prev => prev.map(video => {
+        if (video.id !== videoId) return video;
+        
+        const updatedComments = video.comments.map(c => {
+          if (c.id !== commentId) return c;
+          return {
+            ...c,
+            status: 'replied' as const,
+            repliedText: replyText,
+            replies: [...(c.replies || []), newReply]
+          };
+        });
+
+        return { ...video, comments: updatedComments };
+      }));
+
+      // Sync current active video
+      setCurrentVideo(prev => {
+        if (!prev || prev.id !== videoId) return prev;
+        return {
+          ...prev,
+          comments: prev.comments.map(c => 
+            c.id === commentId ? { 
+              ...c, 
+              status: 'replied' as const, 
+              repliedText: replyText,
+              replies: [...(c.replies || []), newReply] 
+            } : c
+          )
+        };
+      });
+    } catch (error) {
+      console.error('Error posting YouTube reply:', error);
+      // Depending on the app's error handling, we might want to alert the user here
+      throw error;
+    }
   };
 
   const ignoreComment = (videoId: string, commentId: string) => {
@@ -286,41 +477,47 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   };
 
-  const regenerateReply = (videoId: string, commentId: string) => {
-    const templateIdx = MOCK_COMMENTS_TEMPLATES.findIndex(tmpl => 
-      commentId.endsWith(`-${MOCK_COMMENTS_TEMPLATES.indexOf(tmpl)}`)
-    );
+  const regenerateReply = async (videoId: string, commentId: string) => {
+    const video = analyzedVideos.find(v => v.id === videoId);
+    const comment = video?.comments.find(c => c.id === commentId);
+    if (!comment || !video) return;
 
-    if (templateIdx === -1) return;
-
-    const replies = MOCK_COMMENTS_TEMPLATES[templateIdx].replies;
-    
-    setAnalyzedVideos(prev => prev.map(video => {
-      if (video.id !== videoId) return video;
-      
-      const updatedComments = video.comments.map(c => {
-        if (c.id !== commentId) return c;
-        // Toggles between first and second preset reply
-        const currentIdx = replies.indexOf(c.aiReply);
-        const nextIdx = (currentIdx + 1) % replies.length;
-        return { ...c, aiReply: replies[nextIdx] };
+    try {
+      // Phase 9: pass full 7-layer context for grounded, natural reply generation
+      const newReply = await generateGeminiReply(comment.text, {
+        title: video.title,
+        description: video.description,
+        transcript: video.transcript,
+        category: video.category,
+        keywords: video.keywords,
+        summary: video.summary,
+        mainTopic: video.mainTopic,
+        language: video.language,
+        // Phase 9 enrichments
+        channelRules: activePromptRules,
+        previousReplies: comment.replies,
+        commentCategory: comment.category,
+        commentSentiment: comment.sentiment,
+        pastLearnings: feedbacks,
+      }, 'approve'); // Always pass 'approve' here so explicit generation works
+      // Update comment with new AI reply
+      setAnalyzedVideos(prev => prev.map(v => {
+        if (v.id !== videoId) return v;
+        const updatedComments = v.comments.map(c =>
+          c.id === commentId ? { ...c, aiReply: newReply, originalAiReply: newReply } : c
+        );
+        return { ...v, comments: updatedComments };
+      }));
+      setCurrentVideo(prev => {
+        if (!prev || prev.id !== videoId) return prev;
+        const updatedComments = prev.comments.map(c =>
+          c.id === commentId ? { ...c, aiReply: newReply, originalAiReply: newReply } : c
+        );
+        return { ...prev, comments: updatedComments };
       });
-
-      return { ...video, comments: updatedComments };
-    }));
-
-    setCurrentVideo(prev => {
-      if (!prev || prev.id !== videoId) return prev;
-      return {
-        ...prev,
-        comments: prev.comments.map(c => {
-          if (c.id !== commentId) return c;
-          const currentIdx = replies.indexOf(c.aiReply);
-          const nextIdx = (currentIdx + 1) % replies.length;
-          return { ...c, aiReply: replies[nextIdx] };
-        })
-      };
-    });
+    } catch (err) {
+      console.error('Gemini reply generation failed', err);
+    }
   };
 
   const updateReplyText = (videoId: string, commentId: string, text: string) => {
@@ -360,34 +557,134 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  // Simulate auto-pilot approvals
+  // Phase 8 Auto-pilot: decision-aware routing
   useEffect(() => {
-    if (!autoPilotActive || !currentVideo) return;
+    if (approvalMode !== 'auto' || !currentVideo) return;
 
     const pendingComments = currentVideo.comments.filter(c => c.status === 'pending');
     if (pendingComments.length === 0) {
-      setAutoPilotActive(false);
+      setApprovalMode('approve');
       return;
     }
 
     const timer = setTimeout(() => {
-      // Find first non-spam comment
-      const firstValid = pendingComments.find(c => c.category !== 'Spam');
-      if (firstValid) {
-        approveReply(currentVideo.id, firstValid.id, firstValid.aiReply);
-      } else {
-        // Only spam comments left, ignore them
-        pendingComments.forEach(c => {
-          ignoreComment(currentVideo.id, c.id);
+      // 1. Process flag/hide/ignore first to clear the queue
+      const highPriorityMute = pendingComments.find(
+        (c) => c.aiDecision === 'flag' || c.aiDecision === 'hide' || c.aiDecision === 'ignore'
+          || c.category === 'Hate' || c.category === 'Spam' || c.category === 'Bot'
+      );
+      if (highPriorityMute) {
+        ignoreComment(currentVideo.id, highPriorityMute.id);
+        return;
+      }
+
+      // 2. Sort actionable comments (reply/escalate/like/heart) by priorityScore desc
+      const actionable = pendingComments
+        .filter(c => c.aiDecision !== 'flag' && c.aiDecision !== 'hide' && c.aiDecision !== 'ignore')
+        .sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
+
+      if (actionable.length > 0) {
+        const top = actionable[0];
+        // For reply/escalate: approve the reply text; for like/heart: also approve
+        approveReply(currentVideo.id, top.id, top.aiReply).catch(err => {
+          console.error("Auto-pilot failed to post reply:", err);
+          // If a post fails, revert to manual mode so the user can investigate
+          setApprovalMode('approve');
         });
+      } else {
+        setApprovalMode('approve');
       }
     }, 1500);
 
     return () => clearTimeout(timer);
-  }, [autoPilotActive, currentVideo]);
+  }, [approvalMode, currentVideo]);
 
-  const toggleAutoPilot = () => {
-    setAutoPilotActive(prev => !prev);
+
+  /**
+   * Phase 8: Override the AI decision for a specific comment.
+   * Creators can change the recommended action at any time.
+   */
+  const applyDecision = (videoId: string, commentId: string, decision: DecisionAction, reason?: string) => {
+    const updater = (comments: Comment[]) =>
+      comments.map(c =>
+        c.id === commentId
+          ? { ...c, aiDecision: decision, aiDecisionReason: reason ?? c.aiDecisionReason }
+          : c
+      );
+
+    setAnalyzedVideos(prev =>
+      prev.map(v => v.id !== videoId ? v : { ...v, comments: updater(v.comments) })
+    );
+    setCurrentVideo(prev =>
+      prev && prev.id === videoId ? { ...prev, comments: updater(prev.comments) } : prev
+    );
+  };
+
+  /**
+   * Phase 5 & 6: Re-run full Gemini classification for all comments in a video.
+   * Updates category (17-way), sentiment (5-way), emotion, and sentimentScore.
+   */
+  const reclassifyComments = async (videoId: string) => {
+    const video = analyzedVideos.find(v => v.id === videoId);
+    if (!video) return;
+
+    try {
+      const reclassified = await analyzeAndDraftReplies(video.comments, {
+        title: video.title,
+        description: video.description,
+        transcript: video.transcript,
+        category: video.category,
+        keywords: video.keywords,
+        summary: video.summary,
+        mainTopic: video.mainTopic,
+        language: video.language,
+        channelRules: activePromptRules,
+        pastLearnings: feedbacks,
+      }, approvalMode);
+
+      const processed = reclassified.map((c) => {
+        const existing = video.comments.find(xc => xc.id === c.id);
+        const enriched = {
+          ...c,
+          isSuperThanks: existing?.isSuperThanks ?? c.isSuperThanks,
+          isMember: existing?.isMember ?? c.isMember,
+          isVerified: existing?.isVerified ?? c.isVerified,
+        };
+
+        const { score, tier } = computePriorityScore(enriched.category, {
+          isSuperThanks: enriched.isSuperThanks,
+          isMember: enriched.isMember,
+          isPinned: enriched.isPinned,
+          isVerified: enriched.isVerified,
+          textLength: enriched.text.length,
+          sentiment: enriched.sentiment,
+          thoughtfulnessScore: enriched.thoughtfulnessScore,
+        });
+
+        const localDecision = computeDecision(
+          enriched.category, tier, enriched.sentiment,
+          enriched.isMember, enriched.isSuperThanks, enriched.isVerified, enriched.thoughtfulnessScore
+        );
+
+        return {
+          ...enriched,
+          originalAiReply: enriched.aiReply,
+          priorityScore: score,
+          priorityTier: tier,
+          aiDecision: (enriched as any).aiDecision ?? localDecision.action,
+          aiDecisionReason: (enriched as any).aiDecisionReason ?? localDecision.reason,
+        };
+      });
+
+      setAnalyzedVideos(prev =>
+        prev.map(v => (v.id !== videoId ? v : { ...v, comments: processed }))
+      );
+      setCurrentVideo(prev =>
+        prev && prev.id === videoId ? { ...prev, comments: processed } : prev
+      );
+    } catch (err) {
+      console.error('reclassifyComments failed:', err);
+    }
   };
 
   return (
@@ -396,15 +693,24 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       currentVideo,
       kpis,
       isAnalyzing,
-      autoPilotActive,
+      approvalMode,
+      feedbacks,
+      activePromptRules,
+      globalBroadcast,
+      setGlobalBroadcast,
       analyzeVideo,
       approveReply,
       ignoreComment,
       regenerateReply,
       updateReplyText,
       clearVideo,
-      toggleAutoPilot,
-      setCurrentVideoById
+      setApprovalMode,
+      setCurrentVideoById,
+      submitFeedback,
+      addPromptRule,
+      removePromptRule,
+      reclassifyComments,
+      applyDecision
     }}>
       {children}
     </DashboardContext.Provider>
